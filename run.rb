@@ -159,6 +159,14 @@ datasets['dataSetsInfo']['sets'].each { |dataset|
     end
   }
 
+
+  create_folder(path_prefix + '/datasets/' + dataset_object_id.to_s + '/uploads')
+  uploads_list = GoodData.get(dataset['dataUploads'])
+  uploads_list['dataUploads']['uploads'].each { |upload|
+    upload_object_id = get_id_from_url(upload['dataUpload']['uri'])
+    save_to_file(upload, path_prefix + '/datasets/' + dataset_object_id.to_s + '/uploads/' + upload_object_id.to_s + '.json')
+  }
+
   puts ' - ' + dataset_detail['dataSet']['meta']['identifier']
 }
 
@@ -166,7 +174,7 @@ save_to_file(ldm_result, path_prefix + '/ldm.json')
 
 
 #TODO
-#exit
+exit
 
 
 puts '- users'
