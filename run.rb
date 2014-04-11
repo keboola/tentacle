@@ -177,10 +177,6 @@ datasets['dataSetsInfo']['sets'].each { |dataset|
 save_to_file(ldm_result, path_prefix + '/ldm.json')
 
 
-#TODO
-exit
-
-
 puts '- users'
 create_folder(path_prefix + '/users')
 users = GoodData.get('/gdc/projects/' + options[:pid] + '/users')
