@@ -143,6 +143,10 @@ datasets['dataSetsInfo']['sets'].each { |dataset|
     fact_object_id = get_id_from_url(fact_url)
 
     save_to_file(fact, path_prefix + '/datasets/' + dataset_object_id.to_s + '/facts/' + fact_object_id.to_s + '.json')
+    save_to_file(GoodData.get('/gdc/md/' + options[:pid] + '/usedby/' + fact_object_id.to_s),
+                 path_prefix + '/datasets/' + dataset_object_id.to_s + '/facts/' + fact_object_id.to_s + '.used_by.json')
+    save_to_file(GoodData.get('/gdc/md/' + options[:pid] + '/using/' + fact_object_id.to_s),
+                 path_prefix + '/datasets/' + dataset_object_id.to_s + '/facts/' + fact_object_id.to_s + '.using.json')
   }
 
   ldm_result['projectModelView']['model']['projectModel']['datasets'].each { |ldm_dataset|
