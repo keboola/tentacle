@@ -62,6 +62,7 @@ end
 
 puts '- validation'
 create_folder(path_prefix + '/validation')
+ref_integrity_fails = {}
 validations_by_objects = {}
 validation_poll = GoodData.post('/gdc/md/' +  options[:pid] + '/validate', { 'validateProject' => ['ldm','pdm','invalid_objects'] })
 finished = false
@@ -100,9 +101,18 @@ validation_result['projectValidateResult']['results'].each { |validation_group|
       end
       validations_by_objects[object] << { 'message' => message, 'level' => validation['level'], 'ecat' => validation['ecat'] }
     }
+
+    if validation['ecat'] == 'REF_INTEGRITY'
+      source = validation['pars'][1]['object']['id']
+      target = 'dataset.' + validation['pars'][5]['object']['name']
+
+      unless ref_integrity_fails.has_key?(source)
+        ref_integrity_fails[source] = []
+      end
+      ref_integrity_fails[source] << target
+    end
   }
 }
-
 
 validations_by_objects.each {|key, value|
   save_to_file(value, path_prefix + '/validation/' + key + '.json')
@@ -149,9 +159,21 @@ datasets['dataSetsInfo']['sets'].each { |dataset|
                  path_prefix + '/datasets/' + dataset_object_id.to_s + '/facts/' + fact_object_id.to_s + '.using.json')
   }
 
+
+  create_folder(path_prefix + '/datasets/' + dataset_object_id.to_s + '/uploads')
+  uploads_list = GoodData.get(dataset['dataUploads'])
+  uploads_list['dataUploads']['uploads'].each { |upload|
+    upload_object_id = get_id_from_url(upload['dataUpload']['uri'])
+    save_to_file(upload, path_prefix + '/datasets/' + dataset_object_id.to_s + '/uploads/' + upload_object_id.to_s + '.json')
+  }
+
   ldm_result['projectModelView']['model']['projectModel']['datasets'].each { |ldm_dataset|
     if ldm_dataset['dataset']['identifier'] == dataset_detail['dataSet']['meta']['identifier']
       ldm_dataset['dataset']['object_id'] = dataset_object_id
+
+      if ref_integrity_fails.has_key?(dataset_object_id.to_s)
+        ldm_dataset['dataset']['ref_integrity_fails'] = ref_integrity_fails[dataset_object_id.to_s]
+      end
       ldm_datasets << ldm_dataset
     end
   }
@@ -161,14 +183,6 @@ datasets['dataSetsInfo']['sets'].each { |dataset|
       ldm_dimension['dateDimension']['object_id'] = dataset_object_id
       ldm_dimensions << ldm_dimension
     end
-  }
-
-
-  create_folder(path_prefix + '/datasets/' + dataset_object_id.to_s + '/uploads')
-  uploads_list = GoodData.get(dataset['dataUploads'])
-  uploads_list['dataUploads']['uploads'].each { |upload|
-    upload_object_id = get_id_from_url(upload['dataUpload']['uri'])
-    save_to_file(upload, path_prefix + '/datasets/' + dataset_object_id.to_s + '/uploads/' + upload_object_id.to_s + '.json')
   }
 
   puts ' - ' + dataset_detail['dataSet']['meta']['identifier']
