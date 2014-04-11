@@ -130,9 +130,9 @@ datasets['dataSetsInfo']['sets'].each { |dataset|
     attribute_object_id = get_id_from_url(attribute_url)
 
     save_to_file(attribute, path_prefix + '/datasets/' + dataset_object_id.to_s + '/attributes/' + attribute_object_id.to_s + '.json')
-    save_to_file(GoodData.get('/gdc/md/' + options[:pid] + '/usedby/' + dataset_object_id.to_s),
+    save_to_file(GoodData.get('/gdc/md/' + options[:pid] + '/usedby/' + attribute_object_id.to_s),
                  path_prefix + '/datasets/' + dataset_object_id.to_s + '/attributes/' + attribute_object_id.to_s + '.used_by.json')
-    save_to_file(GoodData.get('/gdc/md/' + options[:pid] + '/using/' + dataset_object_id.to_s),
+    save_to_file(GoodData.get('/gdc/md/' + options[:pid] + '/using/' + attribute_object_id.to_s),
                  path_prefix + '/datasets/' + dataset_object_id.to_s + '/attributes/' + attribute_object_id.to_s + '.using.json')
   }
 
