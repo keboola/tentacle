@@ -13,7 +13,7 @@ begin
   optparse.parse!
   mandatory = [:pid, :username, :password]
   missing = mandatory.select{ |param| options[param].nil? }
-  if not missing.empty?
+  unless missing.empty?
     puts "Missing options: #{missing.join(', ')}"
     puts optparse
     exit
@@ -26,10 +26,10 @@ end
 
 
 start_time = Time.now
-path_prefix = options[:pid] + '/' + start_time.strftime('%Y%m%d-%H%M%S.%L')
+path_prefix = 'data/' + options[:pid] + '/' + start_time.strftime('%Y%m%d-%H%M%S.%L')
 
 def get_id_from_url(url)
-	return url.scan(/.*\/(\d+)$/).last.last.to_i
+	url.scan(/.*\/(\d+)$/).last.last.to_i
 end
 
 def create_folder(path)
@@ -48,6 +48,7 @@ GoodData.connect(options[:username], options[:password])
 GoodData.use(options[:pid])
 
 
+puts '- ldm'
 ldm_poll = GoodData.get('/gdc/projects/' + options[:pid] + '/model/view')
 finished = false
 ldm_result = nil
@@ -57,6 +58,56 @@ until finished
   ldm_result = GoodData.get(ldm_poll['asyncTask']['link']['poll'])
   finished = !(defined? ldm_result['asyncTask']['link']['poll'])
 end
+
+
+puts '- validation'
+create_folder(path_prefix + '/validation')
+validations_by_objects = {}
+validation_poll = GoodData.post('/gdc/md/' +  options[:pid] + '/validate', { 'validateProject' => ['ldm','pdm','invalid_objects'] })
+finished = false
+validation_result = nil
+until finished
+  validation_result = GoodData.get(validation_poll['asyncTask']['link']['poll'])
+  finished = validation_result.has_key?('projectValidateResult')
+end
+
+validation_result['projectValidateResult']['results'].each { |validation_group|
+  validation_group['body']['log'].each { |validation|
+    params = []
+    objects = []
+    validation['pars'].each { |param|
+      key, value = param.first
+      case key
+        when 'common'
+          params << value
+        when 'object'
+          params << value['name']
+          objects << value['id']
+        when 'sli_el'
+          params << value['vals'].to_s
+        else
+          params << value.to_s
+          puts '!! UNKNOWN VALIDATION PARAM TYPE !!'
+          puts key
+          puts value
+      end
+    }
+
+    message = sprintf(validation['msg'], *params)
+    objects.each { |object|
+      unless validations_by_objects.has_key?(object)
+        validations_by_objects[object] = []
+      end
+      validations_by_objects[object] << { 'message' => message, 'level' => validation['level'], 'ecat' => validation['ecat'] }
+    }
+  }
+}
+
+
+validations_by_objects.each {|key, value|
+  save_to_file(value, path_prefix + '/validation/' + key + '.json')
+}
+
 
 
 puts '- datasets'
@@ -114,10 +165,7 @@ datasets['dataSetsInfo']['sets'].each { |dataset|
 save_to_file(ldm_result, path_prefix + '/ldm.json')
 
 
-
 #TODO
-#result = GoodData.post('/gdc/md/' +  options[:pid] + '/validate', { 'validateProject' => ['ldm','pdm','metric_filter','invalid_objects'] })
-#puts result
 #exit
 
 
