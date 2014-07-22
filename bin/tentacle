@@ -1,0 +1,27 @@
+#!/usr/bin/env ruby
+
+require 'optparse'
+require 'methadone'
+require 'tentacle.rb'
+
+
+class App
+  include Methadone::Main
+  include Methadone::CLILogging
+
+  main do |pid,username,password|
+    e = Tentacle::Extractor.new(pid, username, password)
+    e.run
+  end
+
+  description "Keboola Tentacle | versioning tool for GoodData projects"
+  arg :pid, :required
+  arg :username, :required
+  arg :password, :required
+
+  version Tentacle::VERSION
+
+  use_log_level_option
+
+  go!
+end
