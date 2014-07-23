@@ -1,7 +1,7 @@
 require 'tentacle/version'
 require 'gooddata'
 require 'tempfile'
-require 'elasticsearch'
+require 'aws-sdk'
 
 module Tentacle
   class Extractor
@@ -9,18 +9,20 @@ module Tentacle
     include Methadone::CLILogging
     include Methadone::Main
 
-    def initialize(pid,username,password)
+    def initialize(pid,username,password,s3_key,s3_secret)
       @pid = pid
       @start_time = Time.now
-      @path_prefix = 'data/' + pid + '/' + @start_time.strftime('%Y%m%d-%H%M%S.%L')
+
+      @dir = Dir.mktmpdir(@start_time.strftime('%Y%m%d-%H%M%S.%L'))
+      puts @dir
 
       GoodData.connect(username, password)
       GoodData.use(pid)
 
-      #client = Elasticsearch::Client.new log: true
-      #client.transport.reload_connections!
-      #client.cluster.health
-      #client.search q: 'test'
+      @s3 = AWS::S3.new(
+        :access_key_id => s3_key,
+        :secret_access_key => s3_secret
+      )
     end
 
     def get_id_from_url(url)
@@ -29,65 +31,52 @@ module Tentacle
 
     def run
       get_users
-      #get_ldm
-      #validate
-      #get_datasets
-      #get_metrics
-      #get_reports
-      #get_dashboards
+      ldm_result = get_ldm
+      ref_integrity_fails = validate
+      get_datasets(ldm_result,ref_integrity_fails)
+      get_metrics
+      get_reports
+      get_dashboards
 
       puts 'Duration ' + (Time.now - @start_time).to_s + ' s'
     end
 
-    def save_to_file(content, name)
-      file = Tempfile.new(name)
-      file.puts(content)
-      file.close
-      file.path
+    def save_to_file(content, name, dir=nil)
+      if dir
+        unless File.directory?(@dir + '/' + dir)
+          FileUtils.mkdir_p(@dir + '/' + dir)
+        end
+      end
+      path = @dir + '/' + (dir ? dir + '/' : '') + name + '.json'
+      f = File.new(path, 'w')
+      f.write(content.to_json)
+      f.close
     end
 
     def get_users
-      file = Tempfile.new('users')
-
-      users = GoodData.get('/gdc/projects/' + @pid + '/users')
+      users = GoodData.get(sprintf('/gdc/projects/%s/users', @pid))
       users['users'].each { |user|
         user_object_id = user['user']['links']['self'][21..-1]
-        file.puts(user)
+        save_to_file(user, user_object_id, 'users')
       }
-
-      file_path = file.path
-      file.close
-
-      File.open(file_path, 'r') do |f|
-        f.each_line do |line|
-          puts line
-        end
-      end
     end
 
     def get_ldm
       ldm_poll = GoodData.get(sprintf('/gdc/projects/%s/model/view', @pid))
       finished = false
       ldm_result = nil
-      ldm_datasets = []
-      ldm_dimensions = []
       until finished
         ldm_result = GoodData.get(ldm_poll['asyncTask']['link']['poll'])
         finished = !(defined? ldm_result['asyncTask']['link']['poll'])
       end
-
-      file = Tempfile.new('ldm')
-      file.write(ldm_result)
-
-      puts file.path
-      file.read
-      file.close
+      save_to_file(ldm_result, 'ldm', nil)
+      ldm_result
     end
 
     def validate
       ref_integrity_fails = {}
       validations_by_objects = {}
-      validation_poll = GoodData.post('/gdc/md/' +  @pid + '/validate', { 'validateProject' => ['ldm','pdm','invalid_objects'] })
+      validation_poll = GoodData.post(sprintf('/gdc/md/%s/validate', @pid), { 'validateProject' => ['ldm','pdm','invalid_objects'] })
       finished = false
       validation_result = nil
       until finished
@@ -135,61 +124,55 @@ module Tentacle
             ref_integrity_fails[source] << target
           end
         }
+
+        ref_integrity_fails
       }
 
       validations_by_objects.each {|key, value|
-        puts key
-        puts value
-
-        file = Tempfile.new('validation-' + key)
-        file.write(ldm_result)
-
-        puts file.path
-        file.read
-        file.close
+        save_to_file(value, 'validation', key)
       }
     end
 
-    def get_datasets
-      datasets = GoodData.get('/gdc/md/' + @pid + '/data/sets')
+    def get_datasets(ldm_result,ref_integrity_fails)
+      ldm_datasets = []
+      ldm_dimensions = []
+
+      datasets = GoodData.get(sprintf('/gdc/md/%s/data/sets', @pid))
       datasets['dataSetsInfo']['sets'].each { |dataset|
         dataset_detail = GoodData.get(dataset['meta']['uri'])
         dataset_object_id = get_id_from_url(dataset['meta']['uri'])
 
-        save_to_file(dataset_detail, path_prefix + '/datasets/' + dataset_object_id.to_s + '/definition.json')
-        save_to_file(GoodData.get('/gdc/md/' + @pid + '/usedby/' + dataset_object_id.to_s),
-                     path_prefix + '/datasets/' + dataset_object_id.to_s + '/used_by.json')
-        save_to_file(GoodData.get('/gdc/md/' + @pid + '/using/' + dataset_object_id.to_s),
-                     path_prefix + '/datasets/' + dataset_object_id.to_s + '/using.json')
+        dataset_folder = 'datasets/' + dataset_object_id.to_s
+        save_to_file(dataset_detail, 'detail', dataset_folder)
+        save_to_file(GoodData.get(sprintf('/gdc/md/%s/usedby/%s', @pid, dataset_object_id.to_s)), 'used_by', dataset_folder)
+        save_to_file(GoodData.get(sprintf('/gdc/md/%s/using/%s', @pid, dataset_object_id.to_s)), 'using', dataset_folder)
 
         dataset_detail['dataSet']['content']['attributes'].each { |attribute_url|
           attribute = GoodData.get(attribute_url)
           attribute_object_id = get_id_from_url(attribute_url)
+          attribute_folder = dataset_folder + '/attributes/' + attribute_object_id.to_s
 
-          save_to_file(attribute, path_prefix + '/datasets/' + dataset_object_id.to_s + '/attributes/' + attribute_object_id.to_s + '.json')
-          save_to_file(GoodData.get('/gdc/md/' + @pid + '/usedby/' + attribute_object_id.to_s),
-                       path_prefix + '/datasets/' + dataset_object_id.to_s + '/attributes/' + attribute_object_id.to_s + '.used_by.json')
-          save_to_file(GoodData.get('/gdc/md/' + @pid + '/using/' + attribute_object_id.to_s),
-                       path_prefix + '/datasets/' + dataset_object_id.to_s + '/attributes/' + attribute_object_id.to_s + '.using.json')
+          save_to_file(attribute, 'detail', attribute_folder)
+          save_to_file(GoodData.get(sprintf('/gdc/md/%s/usedby/%s', @pid, attribute_object_id.to_s)), 'used_by', attribute_folder)
+          save_to_file(GoodData.get(sprintf('/gdc/md/%s/using/%s', @pid, attribute_object_id.to_s)),  'using', attribute_folder)
         }
 
 
         dataset_detail['dataSet']['content']['facts'].each { |fact_url|
           fact = GoodData.get(fact_url)
           fact_object_id = get_id_from_url(fact_url)
+          fact_folder = dataset_folder + '/facts/' + fact_object_id.to_s
 
-          save_to_file(fact, path_prefix + '/datasets/' + dataset_object_id.to_s + '/facts/' + fact_object_id.to_s + '.json')
-          save_to_file(GoodData.get('/gdc/md/' + @pid + '/usedby/' + fact_object_id.to_s),
-                       path_prefix + '/datasets/' + dataset_object_id.to_s + '/facts/' + fact_object_id.to_s + '.used_by.json')
-          save_to_file(GoodData.get('/gdc/md/' + @pid + '/using/' + fact_object_id.to_s),
-                       path_prefix + '/datasets/' + dataset_object_id.to_s + '/facts/' + fact_object_id.to_s + '.using.json')
+          save_to_file(fact, 'detail', fact_folder)
+          save_to_file(GoodData.get(sprintf('/gdc/md/%s/usedby/%s', @pid, fact_object_id.to_s)), 'used_by', fact_folder)
+          save_to_file(GoodData.get(sprintf('/gdc/md/%s/using/%s', @pid, fact_object_id.to_s)), 'using', fact_folder)
         }
 
 
         uploads_list = GoodData.get(dataset['dataUploads'])
         uploads_list['dataUploads']['uploads'].each { |upload|
           upload_object_id = get_id_from_url(upload['dataUpload']['uri'])
-          save_to_file(upload, path_prefix + '/datasets/' + dataset_object_id.to_s + '/uploads/' + upload_object_id.to_s + '.json')
+          save_to_file(upload, upload_object_id.to_s, dataset_folder + '/uploads')
         }
 
         ldm_result['projectModelView']['model']['projectModel']['datasets'].each { |ldm_dataset|
@@ -219,11 +202,10 @@ module Tentacle
         metric_detail = GoodData.get(metric['link'])
         metric_object_id = get_id_from_url(metric['link'])
 
-        save_to_file(metric_detail, path_prefix + '/metrics/' + metric_object_id.to_s + '.json')
-        save_to_file(GoodData.get('/gdc/md/' + @pid + '/usedby/' + metric_object_id.to_s),
-                     path_prefix + '/metrics/' + metric_object_id.to_s + '.used_by.json')
-        save_to_file(GoodData.get('/gdc/md/' + @pid + '/using/' + metric_object_id.to_s),
-                     path_prefix + '/metrics/' + metric_object_id.to_s + '.using.json')
+        metric_folder = 'metrics/' + metric_object_id.to_s
+        save_to_file(metric_detail, 'detail', metric_folder)
+        save_to_file(GoodData.get(sprintf('/gdc/md/%s/usedby/%s', @pid, metric_object_id.to_s)), 'used_by', metric_folder)
+        save_to_file(GoodData.get(sprintf('/gdc/md/%s/using/%s', @pid, metric_object_id.to_s)), 'using', metric_folder)
       }
     end
 
@@ -232,23 +214,21 @@ module Tentacle
         report_detail = GoodData.get(report['link'])
         report_object_id = get_id_from_url(report['link'])
 
-        save_to_file(report_detail, path_prefix + '/reports/' + report_object_id.to_s + '.json')
+        report_folder = 'reports/' + report_object_id.to_s
+        save_to_file(report_detail, 'detail', report_folder)
 
         report_detail['report']['content']['definitions'].each { |definition_url|
           definition_detail = GoodData.get(definition_url)
           definition_object_id = get_id_from_url(definition_url)
+          definition_folder = report_folder + '/definitions/' + definition_object_id.to_s
 
-          save_to_file(definition_detail, path_prefix + '/report-definitions/' + definition_object_id.to_s + '.json')
-          save_to_file(GoodData.get('/gdc/md/' + @pid + '/usedby/' + definition_object_id.to_s),
-                       path_prefix + '/report-definitions/' + definition_object_id.to_s + '.used_by.json')
-          save_to_file(GoodData.get('/gdc/md/' + @pid + '/using/' + definition_object_id.to_s),
-                       path_prefix + '/report-definitions/' + definition_object_id.to_s + '.using.json')
+          save_to_file(definition_detail, 'detail', definition_folder)
+          save_to_file(GoodData.get('/gdc/md/' + @pid + '/usedby/' + definition_object_id.to_s), 'used_by', definition_folder)
+          save_to_file(GoodData.get('/gdc/md/' + @pid + '/using/' + definition_object_id.to_s), 'using', definition_folder)
         }
 
-        save_to_file(GoodData.get('/gdc/md/' + @pid + '/usedby/' + report_object_id.to_s),
-                     path_prefix + '/reports/' + report_object_id.to_s + '.used_by.json')
-        save_to_file(GoodData.get('/gdc/md/' + @pid + '/using/' + report_object_id.to_s),
-                     path_prefix + '/reports/' + report_object_id.to_s + '.using.json')
+        save_to_file(GoodData.get(sprintf('/gdc/md/%s/usedby/%s', @pid, report_object_id.to_s)), 'used_by', report_folder)
+        save_to_file(GoodData.get(sprintf('/gdc/md/%s/using/%s', @pid, report_object_id.to_s)), 'using', report_folder)
       }
     end
 
@@ -257,12 +237,10 @@ module Tentacle
       dashboards['query']['entries'].each { |dashboard|
         dashboard_object_id = get_id_from_url(dashboard['link'])
 
-        save_to_file(GoodData.get(dashboard['link']),
-                     path_prefix + '/dashboards/' + dashboard_object_id.to_s + '.json')
-        save_to_file(GoodData.get('/gdc/md/' + @pid + '/usedby/' + dashboard_object_id.to_s),
-                     path_prefix + '/dashboards/' + dashboard_object_id.to_s + '.used_by.json')
-        save_to_file(GoodData.get('/gdc/md/' + @pid + '/using/' + dashboard_object_id.to_s),
-                     path_prefix + '/dashboards/' + dashboard_object_id.to_s + '.using.json')
+        dashboard_folder = 'dashboards/' + dashboard_object_id.to_s
+        save_to_file(GoodData.get(dashboard['link']), 'detail', dashboard_folder)
+        save_to_file(GoodData.get('/gdc/md/' + @pid + '/usedby/' + dashboard_object_id.to_s), 'used_by', dashboard_folder)
+        save_to_file(GoodData.get('/gdc/md/' + @pid + '/using/' + dashboard_object_id.to_s), 'using', dashboard_folder)
       }
     end
 

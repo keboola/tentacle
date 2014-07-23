@@ -9,8 +9,8 @@ class App
   include Methadone::Main
   include Methadone::CLILogging
 
-  main do |pid,username,password|
-    e = Tentacle::Extractor.new(pid, username, password)
+  main do |pid,username,password,s3_key,s3_secret|
+    e = Tentacle::Extractor.new(pid, username, password,s3_key,s3_secret)
     e.run
   end
 
@@ -18,6 +18,8 @@ class App
   arg :pid, :required
   arg :username, :required
   arg :password, :required
+  arg :s3_access_key, :required
+  arg :s3_secret_key, :required
 
   version Tentacle::VERSION
 
