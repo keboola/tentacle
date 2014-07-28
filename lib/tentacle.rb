@@ -2,6 +2,7 @@ require 'tentacle/version'
 require 'gooddata'
 require 'tempfile'
 require 'aws-sdk'
+require 'zlib'
 
 module Tentacle
   class Extractor
@@ -12,9 +13,6 @@ module Tentacle
     def initialize(pid,username,password,s3_key,s3_secret)
       @pid = pid
       @start_time = Time.now
-
-      @dir = Dir.mktmpdir(@start_time.strftime('%Y%m%d-%H%M%S.%L'))
-      puts @dir
 
       GoodData.connect(username, password)
       GoodData.use(pid)
@@ -30,15 +28,25 @@ module Tentacle
     end
 
     def run
+      dir_name = @start_time.strftime('%Y%m%d-%H%M%S.%L')
+      @dir = Dir.mktmpdir(dir_name)
+
       get_users
-      ldm_result = get_ldm
-      ref_integrity_fails = validate
-      get_datasets(ldm_result,ref_integrity_fails)
+      get_ldm
+      validations = validate
+      get_datasets(validations)
       get_metrics
       get_reports
       get_dashboards
 
-      puts 'Duration ' + (Time.now - @start_time).to_s + ' s'
+      result = `cd #{@dir};tar -zcvf #{dir_name}.tgz *`
+
+      file_name = @dir + '/' + dir_name + '.tgz'
+      key = File.basename(file_name)
+      @s3.buckets['kbc-tentacle'].objects[key].write(:file => file_name)
+
+      info @dir
+      info 'Duration ' + (Time.now - @start_time).to_s + ' s'
     end
 
     def save_to_file(content, name, dir=nil)
@@ -59,6 +67,7 @@ module Tentacle
         user_object_id = user['user']['links']['self'][21..-1]
         save_to_file(user, user_object_id, 'users')
       }
+      info 'get users finished'
     end
 
     def get_ldm
@@ -70,11 +79,12 @@ module Tentacle
         finished = !(defined? ldm_result['asyncTask']['link']['poll'])
       end
       save_to_file(ldm_result, 'ldm', nil)
+
+      info 'get ldm finished'
       ldm_result
     end
 
     def validate
-      ref_integrity_fails = {}
       validations_by_objects = {}
       validation_poll = GoodData.post(sprintf('/gdc/md/%s/validate', @pid), { 'validateProject' => ['ldm','pdm','invalid_objects'] })
       finished = false
@@ -113,30 +123,14 @@ module Tentacle
             end
             validations_by_objects[object] << { 'message' => message, 'level' => validation['level'], 'ecat' => validation['ecat'] }
           }
-
-          if validation['ecat'] == 'REF_INTEGRITY'
-            source = validation['pars'][1]['object']['id']
-            target = 'dataset.' + validation['pars'][5]['object']['name']
-
-            unless ref_integrity_fails.has_key?(source)
-              ref_integrity_fails[source] = []
-            end
-            ref_integrity_fails[source] << target
-          end
         }
-
-        ref_integrity_fails
       }
 
-      validations_by_objects.each {|key, value|
-        save_to_file(value, 'validation', key)
-      }
+      info 'validation finished'
+      validations_by_objects
     end
 
-    def get_datasets(ldm_result,ref_integrity_fails)
-      ldm_datasets = []
-      ldm_dimensions = []
-
+    def get_datasets(validations)
       datasets = GoodData.get(sprintf('/gdc/md/%s/data/sets', @pid))
       datasets['dataSetsInfo']['sets'].each { |dataset|
         dataset_detail = GoodData.get(dataset['meta']['uri'])
@@ -175,26 +169,14 @@ module Tentacle
           save_to_file(upload, upload_object_id.to_s, dataset_folder + '/uploads')
         }
 
-        ldm_result['projectModelView']['model']['projectModel']['datasets'].each { |ldm_dataset|
-          if ldm_dataset['dataset']['identifier'] == dataset_detail['dataSet']['meta']['identifier']
-            ldm_dataset['dataset']['object_id'] = dataset_object_id
+        if validations.has_key?(dataset_object_id.to_s)
+          save_to_file(validations[dataset_object_id.to_s], 'validation', dataset_folder)
+        end
 
-            if ref_integrity_fails.has_key?(dataset_object_id.to_s)
-              ldm_dataset['dataset']['ref_integrity_fails'] = ref_integrity_fails[dataset_object_id.to_s]
-            end
-            ldm_datasets << ldm_dataset
-          end
-        }
-
-        ldm_result['projectModelView']['model']['projectModel']['dateDimensions'].each { |ldm_dimension|
-          if ldm_dimension['dateDimension']['name'] + '.dataset.dt' == dataset_detail['dataSet']['meta']['identifier']
-            ldm_dimension['dateDimension']['object_id'] = dataset_object_id
-            ldm_dimensions << ldm_dimension
-          end
-        }
-
-        puts ' - ' + dataset_detail['dataSet']['meta']['identifier']
+        info ' - ' + dataset_detail['dataSet']['meta']['identifier']
       }
+
+      info 'get datasets finished'
     end
 
     def get_metrics
@@ -207,6 +189,7 @@ module Tentacle
         save_to_file(GoodData.get(sprintf('/gdc/md/%s/usedby/%s', @pid, metric_object_id.to_s)), 'used_by', metric_folder)
         save_to_file(GoodData.get(sprintf('/gdc/md/%s/using/%s', @pid, metric_object_id.to_s)), 'using', metric_folder)
       }
+      info 'get metrics finished'
     end
 
     def get_reports
@@ -229,6 +212,8 @@ module Tentacle
 
         save_to_file(GoodData.get(sprintf('/gdc/md/%s/usedby/%s', @pid, report_object_id.to_s)), 'used_by', report_folder)
         save_to_file(GoodData.get(sprintf('/gdc/md/%s/using/%s', @pid, report_object_id.to_s)), 'using', report_folder)
+
+        info 'get reports finished'
       }
     end
 
@@ -242,6 +227,7 @@ module Tentacle
         save_to_file(GoodData.get('/gdc/md/' + @pid + '/usedby/' + dashboard_object_id.to_s), 'used_by', dashboard_folder)
         save_to_file(GoodData.get('/gdc/md/' + @pid + '/using/' + dashboard_object_id.to_s), 'using', dashboard_folder)
       }
+      info 'get dashboards finished'
     end
 
   end
