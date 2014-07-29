@@ -25,4 +25,5 @@ Gem::Specification.new do |spec|
   spec.add_dependency 'methadone', '~> 1.5.0'
   spec.add_dependency 'gooddata'
   spec.add_dependency 'aws-sdk'
+  spec.add_dependency 'newrelic_rpm'
 end

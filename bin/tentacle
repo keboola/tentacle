@@ -3,15 +3,24 @@
 require 'optparse'
 require 'methadone'
 require 'tentacle.rb'
-
+require 'syslog/logger'
+require 'newrelic_rpm'
 
 class App
   include Methadone::Main
   include Methadone::CLILogging
 
+  NewRelic::Agent.manual_start
+  logger = Syslog::Logger.new 'tentacle'
+
   main do |pid,username,password,s3_key,s3_secret|
-    e = Tentacle::Extractor.new(pid, username, password,s3_key,s3_secret)
-    e.run
+    begin
+      e = Tentacle::Extractor.new(pid, username, password,s3_key,s3_secret)
+      e.run
+    rescue Exception
+      error = { :message => $!.to_s, :trace => $@, :app => 'tentacle', :priority => 'CRITICAL' }
+      logger.fatal error.to_json
+    end
   end
 
   description "Keboola Tentacle | versioning tool for GoodData projects"

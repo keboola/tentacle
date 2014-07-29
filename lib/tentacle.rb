@@ -2,7 +2,6 @@ require 'tentacle/version'
 require 'gooddata'
 require 'tempfile'
 require 'aws-sdk'
-require 'zlib'
 
 module Tentacle
   class Extractor
