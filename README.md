@@ -6,12 +6,22 @@ Versioning tool for GoodData projects
 
 Run from command line:
 
+
+```
+#!bash
+
 bin/tentacle GD_PID GD_USERNAME GD_PASSWORD S3_ACCESS_KEY S3_SECRET_KEY S3_FILE_PATH
+```
+
 
 Command will download metadata from given GoodData project and save them to separate json files. It will compress 
 all of them to gzip file and send it to given destination in Amazon S3.
 
 File structure will be as following:
+
+
+```
+#!ruby
 
 tentacle.tgz
 - ldm.json
@@ -53,3 +63,4 @@ tentacle.tgz
     - using.json
 - users
   - 0c18c5540bd6bde1a6c8e123794e5353.json
+```
