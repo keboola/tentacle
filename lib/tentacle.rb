@@ -9,7 +9,7 @@ module Tentacle
     include Methadone::CLILogging
     include Methadone::Main
 
-    def initialize(pid,username,password,s3_key,s3_secret)
+    def initialize(pid,username,password,s3_key,s3_secret,s3_file)
       @pid = pid
       @start_time = Time.now
 
@@ -20,6 +20,15 @@ module Tentacle
         :access_key_id => s3_key,
         :secret_access_key => s3_secret
       )
+      @s3_file_name = s3_file
+    end
+
+    def create_dir
+      @dir = Dir.mktmpdir(@start_time.strftime('%Y%m%d-%H%M%S.%L'))
+    end
+
+    def get_dir
+      @dir
     end
 
     def get_id_from_url(url)
@@ -27,25 +36,44 @@ module Tentacle
     end
 
     def run
-      dir_name = @start_time.strftime('%Y%m%d-%H%M%S.%L')
-      @dir = Dir.mktmpdir(dir_name)
+      create_dir
+      info 'preparation finished'
 
       get_users
+      info 'get users finished'
+
       get_ldm
+      info 'get ldm finished'
+
       validations = validate
+      info 'validation finished'
+
       get_datasets(validations)
+      info 'get datasets finished'
+
       get_metrics
+      info 'get metrics finished'
+
       get_reports
+      info 'get reports finished'
+
       get_dashboards
+      info 'get dashboards finished'
 
-      result = `cd #{@dir};tar -zcvf #{dir_name}.tgz *`
+      upload(@dir)
+      info 's3 upload finished'
 
-      file_name = @dir + '/' + dir_name + '.tgz'
-      key = File.basename(file_name)
-      @s3.buckets['kbc-tentacle'].objects[key].write(:file => file_name)
-
-      info @dir
       info 'Duration ' + (Time.now - @start_time).to_s + ' s'
+    end
+
+    def upload(dir)
+      dir_name = @start_time.strftime('%Y%m%d-%H%M%S.%L')
+      result = `cd #{dir};tar -zcvf #{dir_name}.tgz *`
+
+      file_name = dir + '/' + dir_name + '.tgz'
+      bucket = File.dirname(@s3_file_name)
+      key = File.basename(@s3_file_name)
+      @s3.buckets[bucket].objects[key].write(:file => file_name)
     end
 
     def save_to_file(content, name, dir=nil)
@@ -66,7 +94,6 @@ module Tentacle
         user_object_id = user['user']['links']['self'][21..-1]
         save_to_file(user, user_object_id, 'users')
       }
-      info 'get users finished'
     end
 
     def get_ldm
@@ -79,7 +106,6 @@ module Tentacle
       end
       save_to_file(ldm_result, 'ldm', nil)
 
-      info 'get ldm finished'
       ldm_result
     end
 
@@ -125,7 +151,6 @@ module Tentacle
         }
       }
 
-      info 'validation finished'
       validations_by_objects
     end
 
@@ -174,8 +199,6 @@ module Tentacle
 
         info ' - ' + dataset_detail['dataSet']['meta']['identifier']
       }
-
-      info 'get datasets finished'
     end
 
     def get_metrics
@@ -188,7 +211,6 @@ module Tentacle
         save_to_file(GoodData.get(sprintf('/gdc/md/%s/usedby/%s', @pid, metric_object_id.to_s)), 'used_by', metric_folder)
         save_to_file(GoodData.get(sprintf('/gdc/md/%s/using/%s', @pid, metric_object_id.to_s)), 'using', metric_folder)
       }
-      info 'get metrics finished'
     end
 
     def get_reports
@@ -211,8 +233,6 @@ module Tentacle
 
         save_to_file(GoodData.get(sprintf('/gdc/md/%s/usedby/%s', @pid, report_object_id.to_s)), 'used_by', report_folder)
         save_to_file(GoodData.get(sprintf('/gdc/md/%s/using/%s', @pid, report_object_id.to_s)), 'using', report_folder)
-
-        info 'get reports finished'
       }
     end
 
@@ -226,7 +246,6 @@ module Tentacle
         save_to_file(GoodData.get('/gdc/md/' + @pid + '/usedby/' + dashboard_object_id.to_s), 'used_by', dashboard_folder)
         save_to_file(GoodData.get('/gdc/md/' + @pid + '/using/' + dashboard_object_id.to_s), 'using', dashboard_folder)
       }
-      info 'get dashboards finished'
     end
 
   end

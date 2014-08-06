@@ -13,9 +13,9 @@ class App
   NewRelic::Agent.manual_start
   logger = Syslog::Logger.new 'tentacle'
 
-  main do |pid,username,password,s3_key,s3_secret|
+  main do |pid,username,password,s3_key,s3_secret,s3_file|
     begin
-      e = Tentacle::Extractor.new(pid, username, password,s3_key,s3_secret)
+      e = Tentacle::Extractor.new(pid, username, password,s3_key,s3_secret,s3_file)
       e.run
     rescue Exception
       error = { :message => $!.to_s, :trace => $@, :app => 'tentacle', :priority => 'CRITICAL' }
@@ -23,12 +23,13 @@ class App
     end
   end
 
-  description "Keboola Tentacle | versioning tool for GoodData projects"
+  description 'Keboola Tentacle | versioning tool for GoodData projects'
   arg :pid, :required
   arg :username, :required
   arg :password, :required
   arg :s3_access_key, :required
   arg :s3_secret_key, :required
+  arg :s3_file_path, :required
 
   version Tentacle::VERSION
 
