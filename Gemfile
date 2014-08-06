@@ -1,4 +1,6 @@
 source 'https://rubygems.org'
 
-# Specify your gem's dependencies in tentacle.gemspec
-gemspec
+gem 'methadone', '~> 1.5.0'
+gem 'gooddata'
+gem 'aws-sdk'
+gem 'newrelic_rpm'
